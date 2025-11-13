@@ -1,0 +1,3 @@
+The adversary gained persistence by modifying Windows Registry (T1547).
+They used PowerShell for command execution (T1059).
+The attacker performed network discovery using ARP scans (T1046).

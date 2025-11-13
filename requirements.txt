@@ -1,0 +1,9 @@
+flask
+psutil
+watchdog
+yara-python
+scikit-learn
+numpy
+pyqt6
+python-magic-bin
+requests

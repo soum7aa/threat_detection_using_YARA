@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Application specific
+uploads/
+quarantine/
+*.log
+*.save
+config.json
+
+# Test files
+eicar.txt
+eicar_test.txt
+
+# Large binaries
+*.exe
+*.msi
+*.dmg
+*.pkg
+
+# Office documents (test files)
+*.pptx
+*.docx
+*.xlsx
+*.pdf
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+
+

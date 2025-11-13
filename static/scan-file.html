@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Adaptive Unified Real-time Analyzer — File Scan</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --fg:#e6edf3; --muted:#9fb0c3; --card:#121822; --bord:#1c2633;
+      --ok:#17c964; --warn:#f5a524; --bad:#f31260; --info:#0070f3;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue',Arial,'Noto Sans','Apple Color Emoji','Segoe UI Emoji','Segoe UI Symbol';}
+    header{position:sticky;top:0;z-index:10;background:linear-gradient(180deg,rgba(11,15,20,.95),rgba(11,15,20,.6));backdrop-filter:blur(8px);border-bottom:1px solid var(--bord);}
+    .wrap{max-width:900px;margin:0 auto;padding:16px}
+    h1{font-size:20px;margin:0 0 4px 0}
+    .sub{color:var(--muted);font-size:13px}
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    button,input{background:#0e141d;color:var(--fg);border:1px solid var(--bord);border-radius:8px;padding:8px 10px;font-size:14px}
+    button{cursor:pointer}
+    button.primary{background:#0e1f36;border-color:#173657}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    main{padding:24px 16px 40px}
+    .card{background:var(--card);border:1px solid var(--bord);border-radius:14px;padding:18px;margin:0 auto;max-width:700px}
+    .section-title{font-weight:600;margin:0 0 12px 0}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .pill{background:#0e141d;border:1px solid var(--bord);border-radius:8px;padding:4px 8px;font-size:12px;color:var(--muted)}
+    .tiny{font-size:12px;color:var(--muted)}
+    .badge{border:1px solid var(--bord);border-radius:999px;padding:4px 8px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+    .sev-low{border-color:#22402e;color:#7ee2a8}
+    .sev-med{border-color:#4d3a10;color:#ffd18b}
+    .sev-high{border-color:#4a1422;color:#ff99bb}
+    .status-dot{display:inline-block;width:10px;height:10px;border-radius:50%}
+    .status-ok{background:var(--ok)}
+    .status-warn{background:var(--warn)}
+    .status-bad{background:var(--bad)}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .result-block{margin-top:16px;border:1px solid var(--bord);border-radius:12px;padding:14px}
+    .muted{color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <div style="display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap">
+        <div>
+          <h1>File Scan</h1>
+          <div class="sub">Upload a file to analyze with YARA signatures and heuristic checks.</div>
+        </div>
+        <div class="toolbar" style="margin:0">
+          <button id="btnDashboard" title="Back to live dashboard">⬅️ Dashboard</button>
+          <button id="btnTestMalicious" class="primary" title="Test URL Safety">🔍 Test Malicious Site</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="section-title">Upload & Scan</div>
+      <p class="tiny muted" style="margin-bottom:16px">Supported types: executables, archives, scripts, and documents. Files stay local to this system.</p>
+      <div class="row" style="margin-bottom:16px">
+        <input id="fileInput" type="file" style="flex:1" accept=".exe,.dll,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.ps1,.bat,.vbs,.js,.jar,.scr,.msi,.cmd,.zip,.7z,.rar,.txt" />
+        <button id="btnScanFile" class="primary" disabled>Scan File</button>
+      </div>
+
+      <div id="fileMeta" class="tiny muted">Select a file to view its details before scanning.</div>
+
+      <div id="scanResults" class="result-block" style="display:none;margin-top:24px">
+        <div class="tiny muted">Scan results will appear here.</div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const btnScanFile = document.getElementById('btnScanFile');
+    const fileMeta = document.getElementById('fileMeta');
+    const scanResults = document.getElementById('scanResults');
+    const btnDashboard = document.getElementById('btnDashboard');
+    const btnTestMalicious = document.getElementById('btnTestMalicious');
+
+    const ACCEPTED_TYPES = '.exe,.dll,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.ps1,.bat,.vbs,.js,.jar,.scr,.msi,.cmd,.zip,.7z,.rar,.txt';
+
+    function badge(text, cls){ return `<span class="badge ${cls||''}">${text}</span>`; }
+
+    function humanSize(bytes){
+      if (!Number.isFinite(bytes)) return '-';
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024*1024) return `${(bytes/1024).toFixed(1)} KB`;
+      if (bytes < 1024*1024*1024) return `${(bytes/1024/1024).toFixed(1)} MB`;
+      return `${(bytes/1024/1024/1024).toFixed(1)} GB`;
+    }
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        btnScanFile.disabled = true;
+        fileMeta.innerHTML = 'Select a file to view its details before scanning.';
+        scanResults.style.display = 'none';
+        return;
+      }
+
+      btnScanFile.disabled = false;
+      fileMeta.innerHTML = `
+        <div class="row" style="margin-bottom:6px">
+          <div class="pill">Name: ${file.name}</div>
+          <div class="pill">Size: ${humanSize(file.size)}</div>
+          <div class="pill">Type: ${file.type || 'unknown'}</div>
+        </div>
+        <div class="tiny muted">Click "Scan File" to analyze using YARA signatures and heuristics.</div>
+      `;
+    });
+
+    btnScanFile.addEventListener('click', async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+
+      btnScanFile.disabled = true;
+      btnScanFile.textContent = 'Scanning…';
+
+      scanResults.style.display = 'block';
+      scanResults.innerHTML = `
+        <div class="row" style="justify-content:flex-start;gap:10px">
+          <div class="status-dot status-warn"></div>
+          <div>Processing file… Please wait.</div>
+        </div>
+      `;
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file, file.name);
+        const res = await fetch('/api/upload_scan', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const data = await res.json();
+        if (data.status !== 'ok') throw new Error(data.error || 'Scan failed');
+
+        const hasYara = Array.isArray(data.yara) && data.yara.length > 0;
+        const hasHeuristics = Array.isArray(data.heuristics) && data.heuristics.length > 0;
+        const scanSteps = Array.isArray(data.scan_steps) ? data.scan_steps : [];
+        const innerHits = Array.isArray(data.inner_hits) ? data.inner_hits : [];
+        const metadata = data.metadata || {};
+        const mimeType = data.file?.mime_type || 'unknown';
+        const verdict = (data.verdict || 'unknown').toLowerCase();
+        const analysisNotes = Array.isArray(data.analysis) ? data.analysis.filter(Boolean) : [];
+        const verdictClass = verdict === 'suspicious' ? 'sev-high' : verdict === 'clean' ? 'sev-low' : 'sev-med';
+        const verdictLabel = verdict === 'suspicious'
+          ? 'Verdict: SUSPICIOUS'
+          : verdict === 'clean'
+            ? 'Verdict: CLEAN'
+            : `Verdict: ${verdict.toUpperCase()}`;
+        const exifEntries = metadata.exif ? Object.entries(metadata.exif).slice(0, 10) : [];
+
+        scanResults.innerHTML = `
+          <div class="row" style="margin-bottom:12px">
+            ${badge(verdictLabel, verdictClass)}
+          </div>
+          <div class="row" style="margin-bottom:8px">
+            <div class="pill">File: ${data.file?.name || file.name}</div>
+            <div class="pill">Size: ${humanSize(data.file?.size ?? file.size)}</div>
+            <div class="pill">Type: ${data.file?.type || file.type || 'unknown'}</div>
+            <div class="pill">MIME: ${mimeType}</div>
+          </div>
+          ${scanSteps.length ? `
+            <div style="margin-bottom:12px">
+              <div class="tiny muted" style="margin-bottom:4px">Scan Steps:</div>
+              <div class="row" style="gap:8px">${scanSteps.map(step => badge(step, 'sev-low')).join(' ')}</div>
+            </div>
+          ` : ''}
+          ${hasYara ? `
+            <div style="margin-bottom:12px">
+              <div class="tiny muted" style="margin-bottom:4px">YARA Signature Matches:</div>
+              <div class="row" style="gap:8px">${data.yara.map(rule => badge(rule, 'sev-high')).join(' ')}</div>
+            </div>
+          ` : ''}
+          ${hasHeuristics ? `
+            <div style="margin-bottom:12px">
+              <div class="tiny muted" style="margin-bottom:4px">Suspicious Patterns:</div>
+              <div class="row" style="gap:8px">${data.heuristics.map(item => badge(item, 'sev-med')).join(' ')}</div>
+            </div>
+          ` : ''}
+          ${data.file?.sha256 ? `
+            <div class="tiny muted">SHA-256: <span class="mono">${data.file.sha256}</span></div>
+          ` : ''}
+          ${exifEntries.length ? `
+            <div style="margin-top:12px">
+              <div class="tiny muted" style="margin-bottom:4px">EXIF Metadata (sample):</div>
+              <div class="tiny muted mono" style="max-height:160px;overflow:auto;padding-right:4px">
+                ${exifEntries.map(([key, value]) => `<div>${key}: ${value}</div>`).join('')}
+              </div>
+            </div>
+          ` : ''}
+          ${innerHits.length ? `
+            <div style="margin-top:12px">
+              <div class="tiny muted" style="margin-bottom:4px">Inner File Findings:</div>
+              <ul class="tiny muted" style="margin:0;padding-left:18px">
+                ${innerHits.map(hit => `<li>${hit.name || 'entry'} — ${hit.verdict || 'suspicious'}${Array.isArray(hit.yara) && hit.yara.length ? ` (YARA: ${hit.yara.join(', ')})` : ''}</li>`).join('')}
+              </ul>
+            </div>
+          ` : ''}
+          ${analysisNotes.length ? `
+            <div style="margin-top:12px">
+              <div class="tiny muted" style="margin-bottom:4px">Analysis Notes:</div>
+              <ul class="tiny muted" style="margin:0;padding-left:18px">
+                ${analysisNotes.map(note => `<li>${note}</li>`).join('')}
+              </ul>
+            </div>
+          ` : ''}
+          ${verdict === 'clean' ? `
+            <div class="tiny muted" style="margin-top:8px">File appears clean based on current detection pipeline.</div>
+          ` : ''}
+        `;
+      } catch (err) {
+        scanResults.innerHTML = `
+          <div class="row" style="gap:10px">
+            <div class="status-dot status-bad"></div>
+            <div style="color:var(--bad)">Scan failed: ${err.message}</div>
+          </div>
+        `;
+      } finally {
+        btnScanFile.disabled = false;
+        btnScanFile.textContent = 'Scan File';
+      }
+    });
+
+    btnDashboard.addEventListener('click', () => {
+      window.location.href = '/';
+    });
+
+    btnTestMalicious.addEventListener('click', () => {
+      window.location.href = '/test-malicious';
+    });
+  </script>
+</body>
+</html>
+
+
