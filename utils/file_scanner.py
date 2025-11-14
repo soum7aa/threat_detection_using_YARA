@@ -24,6 +24,16 @@ except ImportError:  # pragma: no cover
     Image = None  # type: ignore
     EXIF_TAGS: Dict[int, str] = {}
 
+try:
+    import py7zr  # type: ignore
+except Exception:
+    py7zr = None  # type: ignore
+
+try:
+    import rarfile  # type: ignore
+except Exception:
+    rarfile = None  # type: ignore
+
 
 EICAR_SIGNATURE = b"X5O!P%@AP[4PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 BASE64_HEUR_RE = re.compile(rb'(?:[A-Za-z0-9+/]{80,})(?:={0,2})')
@@ -85,12 +95,14 @@ FILE_TYPE_MAP: Dict[str, Dict[str, Set[str]]] = {
         }
     },
     'archives': {
-        'extensions': {'.zip', '.tar', '.gz', '.tar.gz', '.tgz'},
+        'extensions': {'.zip', '.tar', '.gz', '.tar.gz', '.tgz', '.rar', '.7z'},
         'mime_types': {
             'application/zip',
             'application/x-tar',
             'application/gzip',
-            'application/x-gtar'
+            'application/x-gtar',
+            'application/x-7z-compressed',
+            'application/x-rar'
         }
     },
     'images': {
@@ -153,16 +165,24 @@ def _normalize_extension(path: str) -> str:
 
 
 def classify_file(path: str, mime_type: str) -> str:
+    """Classify file type preferring MIME type, then fall back to extension."""
     ext = _normalize_extension(path)
+    
+    # Primary: check MIME type (most reliable)
     for category, rules in FILE_TYPE_MAP.items():
-        if ext and ext in rules.get('extensions', set()):
-            return category
         mime_matches = rules.get('mime_types', set())
         if mime_type and mime_type in mime_matches:
             return category
         prefixes = rules.get('mime_prefixes', set())
         if mime_type and any(mime_type.startswith(prefix) for prefix in prefixes):
             return category
+    
+    # Fallback: check extension
+    for category, rules in FILE_TYPE_MAP.items():
+        if ext and ext in rules.get('extensions', set()):
+            return category
+    
+    # Last resort: return default or unknown
     return DEFAULT_CATEGORY if ext in FILE_TYPE_MAP.get(DEFAULT_CATEGORY, {}).get('extensions', set()) else 'unknown'
 
 
@@ -250,6 +270,47 @@ class FileScanner:
         self.max_archive_depth = max_archive_depth
         self.max_inner_file_bytes = max_inner_file_bytes
         self.primary_read_size = 2 * 1024 * 1024
+    
+    def _try_7z_extract(self, path: str, tmpdir: str) -> Optional[List[str]]:
+        """Fallback: attempt to extract RAR using 7z.exe (Windows) or 7z (Linux/Mac) CLI."""
+        import subprocess
+        import shutil
+        
+        # Detect 7z executable
+        exe = shutil.which('7z') or shutil.which('7z.exe')
+        if not exe:
+            return None
+        
+        try:
+            # Use 7z to list and extract archive contents
+            result = subprocess.run(
+                [exe, 'x', '-o' + tmpdir, str(path)],
+                capture_output=True,
+                timeout=10,
+                text=True
+            )
+            if result.returncode == 0:
+                # List extracted files
+                list_result = subprocess.run(
+                    [exe, 'l', str(path)],
+                    capture_output=True,
+                    timeout=10,
+                    text=True
+                )
+                if list_result.returncode == 0:
+                    # Parse output to extract filenames (rough heuristic)
+                    files = []
+                    for line in list_result.stdout.split('\n'):
+                        parts = line.split()
+                        if len(parts) > 0 and not parts[0].startswith('-'):
+                            # Last part is usually the filename
+                            fname = parts[-1] if parts else None
+                            if fname and '.' in fname:
+                                files.append(fname)
+                    return files if files else []
+        except Exception:
+            pass
+        return None
 
     def scan(self, path: str, depth: int = 0) -> ScanResult:
         size = 0
@@ -453,6 +514,109 @@ class FileScanner:
                 result.analysis_notes.append('Archive format not recognised (not ZIP/TAR)')
             except Exception as exc:
                 result.analysis_notes.append(f'Archive inspection failed: {exc}')
+
+        # Try 7z (py7zr) if available
+        if py7zr is not None and (str(path).lower().endswith('.7z') or (hasattr(py7zr, 'is_7zfile') and py7zr.is_7zfile(path))):
+            try:
+                with py7zr.SevenZipFile(path, mode='r') as zf, tempfile.TemporaryDirectory() as tmpdir:
+                    names = zf.getnames() if hasattr(zf, 'getnames') else []
+                    for idx, name in enumerate(names):
+                        if idx >= self.max_archive_items:
+                            result.analysis_notes.append('Archive inspection truncated after max entries')
+                            break
+                        try:
+                            zf.extract(targets=[name], path=tmpdir)
+                            child_path = Path(tmpdir) / name
+                            entry = {'name': name, 'size': child_path.stat().st_size if child_path.exists() else 0, 'is_dir': child_path.is_dir() if child_path.exists() else False}
+                            entries.append(entry)
+                            lower_name = name.lower()
+                            if any(ind in lower_name for ind in MACRO_INDICATOR_FILENAMES):
+                                result.heuristics.append(f'archive entry "{name}" indicates potential Office macro payload')
+                            if lower_name.endswith(SUSPICIOUS_ARCHIVE_EXTS):
+                                result.heuristics.append(f'archive contains potentially dangerous file type: {name}')
+                            if depth < self.max_archive_depth and entry['size'] <= self.max_inner_file_bytes and child_path.exists() and child_path.is_file():
+                                try:
+                                    child_result = self.scan(str(child_path), depth + 1)
+                                    entry['child_verdict'] = child_result.verdict
+                                    entry['child_yara'] = child_result.yara_hits
+                                    entry['child_heuristics'] = child_result.heuristics
+                                    if child_result.verdict == 'suspicious':
+                                        suspicious_children.append({'name': name, 'verdict': child_result.verdict, 'yara': child_result.yara_hits, 'heuristics': child_result.heuristics})
+                                except Exception as exc:
+                                    result.analysis_notes.append(f'Failed to analyse 7z entry {name}: {exc}')
+                        except Exception as exc:
+                            result.analysis_notes.append(f'Failed to extract 7z entry {name}: {exc}')
+            except Exception as exc:
+                result.analysis_notes.append(f'7z archive inspection failed: {exc}')
+
+        # Try RAR (rarfile) if available, with 7z fallback
+        if str(path).lower().endswith('.rar'):
+            rar_extracted = False
+            if rarfile is not None:
+                try:
+                    with rarfile.RarFile(path) as rf, tempfile.TemporaryDirectory() as tmpdir:
+                        members = rf.infolist()
+                        for idx, member in enumerate(members):
+                            if idx >= self.max_archive_items:
+                                result.analysis_notes.append('Archive inspection truncated after max entries')
+                                break
+                            try:
+                                rf.extract(member, path=tmpdir)
+                                child_path = Path(tmpdir) / member.filename
+                                entry = {'name': member.filename, 'size': member.file_size if hasattr(member, 'file_size') else (child_path.stat().st_size if child_path.exists() else 0), 'is_dir': False}
+                                entries.append(entry)
+                                lower_name = member.filename.lower()
+                                if any(ind in lower_name for ind in MACRO_INDICATOR_FILENAMES):
+                                    result.heuristics.append(f'archive entry "{member.filename}" indicates potential Office macro payload')
+                                if lower_name.endswith(SUSPICIOUS_ARCHIVE_EXTS):
+                                    result.heuristics.append(f'archive contains potentially dangerous file type: {member.filename}')
+                                if depth < self.max_archive_depth and entry['size'] <= self.max_inner_file_bytes and child_path.exists() and child_path.is_file():
+                                    try:
+                                        child_result = self.scan(str(child_path), depth + 1)
+                                        entry['child_verdict'] = child_result.verdict
+                                        entry['child_yara'] = child_result.yara_hits
+                                        entry['child_heuristics'] = child_result.heuristics
+                                        if child_result.verdict == 'suspicious':
+                                            suspicious_children.append({'name': member.filename, 'verdict': child_result.verdict, 'yara': child_result.yara_hits, 'heuristics': child_result.heuristics})
+                                    except Exception as exc:
+                                        result.analysis_notes.append(f'Failed to analyse rar member {member.filename}: {exc}')
+                            except Exception as exc:
+                                result.analysis_notes.append(f'Failed to extract rar member {getattr(member, "filename", str(member))}: {exc}')
+                        rar_extracted = True
+                except Exception as exc:
+                    result.analysis_notes.append(f'RAR extraction via rarfile failed: {exc}')
+            
+            # Fallback to 7z CLI if rarfile unavailable or extraction failed
+            if not rar_extracted:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    files = self._try_7z_extract(path, tmpdir)
+                    if files is not None:
+                        for idx, fname in enumerate(files):
+                            if idx >= self.max_archive_items:
+                                result.analysis_notes.append('Archive inspection truncated after max entries')
+                                break
+                            child_path = Path(tmpdir) / fname
+                            if child_path.exists():
+                                entry = {'name': fname, 'size': child_path.stat().st_size, 'is_dir': child_path.is_dir()}
+                                entries.append(entry)
+                                lower_name = fname.lower()
+                                if any(ind in lower_name for ind in MACRO_INDICATOR_FILENAMES):
+                                    result.heuristics.append(f'archive entry "{fname}" indicates potential Office macro payload')
+                                if lower_name.endswith(SUSPICIOUS_ARCHIVE_EXTS):
+                                    result.heuristics.append(f'archive contains potentially dangerous file type: {fname}')
+                                if depth < self.max_archive_depth and entry['size'] <= self.max_inner_file_bytes and child_path.is_file():
+                                    try:
+                                        child_result = self.scan(str(child_path), depth + 1)
+                                        entry['child_verdict'] = child_result.verdict
+                                        entry['child_yara'] = child_result.yara_hits
+                                        entry['child_heuristics'] = child_result.heuristics
+                                        if child_result.verdict == 'suspicious':
+                                            suspicious_children.append({'name': fname, 'verdict': child_result.verdict, 'yara': child_result.yara_hits, 'heuristics': child_result.heuristics})
+                                    except Exception as exc:
+                                        result.analysis_notes.append(f'Failed to analyse 7z-extracted member {fname}: {exc}')
+                        rar_extracted = True
+                    else:
+                        result.analysis_notes.append('RAR archive: rarfile unavailable and 7z CLI not found or extraction failed')
 
         result.metadata['entries'] = entries
         if suspicious_children:

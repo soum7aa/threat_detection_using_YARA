@@ -4,6 +4,7 @@ watchdog
 yara-python
 scikit-learn
 numpy
-pyqt6
 python-magic-bin
 requests
+py7zr
+rarfile
