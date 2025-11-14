@@ -55,6 +55,15 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
+If you run into false negatives or MIME-related warnings on Windows, install the optional `filetype` package or `python-magic` with a system libmagic. Example:
+
+```powershell
+pip install filetype
+# or if you prefer libmagic-backed detection and have Chocolatey:
+choco install libmagic
+pip install python-magic
+```
+
 3) Start the Flask backend:
 ```bash
 python run_integrated_system.py
@@ -228,7 +237,7 @@ Install 7-Zip or UnRAR and ensure `7z.exe` or `unrar.exe` is in PATH. The scanne
 - **Development System**: Intended for learning; harden before production
 - **False Positives**: YARA rules and heuristics may flag benign files; tune as needed
 - **Archive Extraction**: RAR requires 7z.exe or unrar in PATH; graceful fallback if unavailable
-- **MIME Detection**: Uses `python-magic` (via `python-magic-bin` on Windows) for accurate file type detection
+- **MIME Detection**: Uses `python-magic` for libmagic-backed detection. If `python-magic` is not available or `libmagic` isn't present on Windows, AURA will automatically fall back to the pure-Python `filetype` library (included in `requirements.txt`) for basic MIME detection. If you'd like `python-magic` on Windows, install a system `libmagic` (e.g. via Chocolatey) or try `python-magic-bin` if your Python version supports it.
 - **Removed PyQt6**: Desktop launcher replaced by modern React frontend
 
 ---

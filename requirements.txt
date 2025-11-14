@@ -4,7 +4,8 @@ watchdog
 yara-python
 scikit-learn
 numpy
-python-magic-bin
+python-magic
+filetype
 requests
 py7zr
 rarfile
