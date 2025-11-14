@@ -32,28 +32,61 @@ AURA is a real-time security monitoring system that combines multiple detection 
 
 ## 🚀 Quick Start
 
-### Backend Setup
+### Option 1: Single Port (Production) — Recommended for simple deployment
 
-1) Clone/navigate to project:
-```bash
-cd threat_detection_using_YARA
-```
-
-2) Create Python virtual environment:
+Run everything on a single port (5000) using the build-and-serve script:
 
 **Linux/Mac:**
+```bash
+chmod +x build_and_serve.sh
+./build_and_serve.sh
+```
+
+**Windows PowerShell:**
+```powershell
+.\build_and_serve.bat
+```
+
+This script will:
+1. Build the React frontend (`npm run build`)
+2. Copy built assets to Flask's `static/` folder
+3. Create a Python venv and install dependencies (if needed)
+4. Start Flask on port 5000, serving both frontend and API
+
+Then open: **http://127.0.0.1:5000**
+
+---
+
+### Option 2: Separate Dev Ports (Development) — Faster reload during development
+
+Start frontend and backend on separate ports for hot-reload during development.
+
+**Terminal 1 — Backend:**
+
+Linux/Mac:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+python run_integrated_system.py
 ```
 
-**Windows PowerShell:**
-```bash
+Windows PowerShell:
+```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python run_integrated_system.py
 ```
+
+**Terminal 2 — Frontend:**
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open: **http://127.0.0.1:5173** (frontend proxies `/api` to backend on 5000)
 
 If you run into false negatives or MIME-related warnings on Windows, install the optional `filetype` package or `python-magic` with a system libmagic. Example:
 
@@ -62,31 +95,10 @@ pip install filetype
 # or if you prefer libmagic-backed detection and have Chocolatey:
 choco install libmagic
 pip install python-magic
+# or if you prefer libmagic-backed detection and have Chocolatey:
+choco install libmagic
+pip install python-magic
 ```
-
-3) Start the Flask backend:
-```bash
-python run_integrated_system.py
-```
-
-Backend runs on `http://127.0.0.1:5000`
-
-### Frontend Setup
-
-4) In another terminal, navigate to frontend and install:
-```bash
-cd frontend
-npm install
-```
-
-5) Start Vite dev server:
-```bash
-npm run dev
-```
-
-Frontend runs on `http://127.0.0.1:5173` (proxies API calls to backend)
-
-6) Open `http://127.0.0.1:5173` in your browser
 
 ---
 
