@@ -122,18 +122,14 @@ except Exception:
 
 
 @app.route('/')
-def index():
+@app.route('/<path:path>')
+def serve_react(path=''):
+    """Serve React frontend (index.html for all routes except /api)."""
+    if path.startswith('api/'):
+        # Let API routes handle themselves
+        return {'error': 'API route not found'}, 404
+    # Serve React app for all other routes (SPA)
     return send_from_directory('static', 'index.html')
-
-
-@app.route('/scan-file')
-def scan_file_page():
-    return send_from_directory('static', 'scan-file.html')
-
-
-@app.route('/test-malicious')
-def test_malicious():
-    return send_from_directory('static', 'test-malicious.html')
 
 
 @app.route('/api/stream')

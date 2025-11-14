@@ -18,6 +18,11 @@ except ImportError:  # pragma: no cover
     magic = None  # type: ignore
 
 try:
+    import filetype  # type: ignore
+except Exception:  # pragma: no cover
+    filetype = None  # type: ignore
+
+try:
     from PIL import Image  # type: ignore
     from PIL.ExifTags import TAGS as EXIF_TAGS  # type: ignore
 except ImportError:  # pragma: no cover
@@ -148,6 +153,17 @@ def detect_mime(path: str) -> str:
     if magic is not None:
         try:
             mime = magic.from_file(path, mime=True)  # type: ignore[attr-defined]
+        except Exception:
+            mime = None
+    # Fallback: try filetype (pure-python detection) if available
+    if not mime and filetype is not None:
+        try:
+            # read a small header chunk - filetype works on bytes
+            with open(path, 'rb') as fh:
+                header = fh.read(4096)
+            guessed = filetype.guess(header)
+            if guessed is not None:
+                mime = getattr(guessed, 'mime', None) or None
         except Exception:
             mime = None
     if not mime:
