@@ -121,17 +121,6 @@ except Exception:
     pass
 
 
-@app.route('/')
-@app.route('/<path:path>')
-def serve_react(path=''):
-    """Serve React frontend (index.html for all routes except /api)."""
-    if path.startswith('api/'):
-        # Let API routes handle themselves
-        return {'error': 'API route not found'}, 404
-    # Serve React app for all other routes (SPA)
-    return send_from_directory('static', 'index.html')
-
-
 @app.route('/api/stream')
 def stream():
     def gen():
@@ -359,6 +348,17 @@ def _background_scan(paths, settings):
                     break
     finally:
         SCAN_STATE['running'] = False
+
+
+# Serve single-page React app for non-API routes (placed after API routes so API endpoints
+# are matched first). This handler returns `index.html` for client-side routing.
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react(path):
+    # Allow API routes to be handled by their own handlers
+    if path.startswith('api/'):
+        return jsonify({'error': 'API route not found'}), 404
+    return send_from_directory('static', 'index.html')
 
 
 @app.route('/api/scan_paths/start', methods=['POST'])
